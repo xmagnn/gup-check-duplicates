@@ -1,0 +1,62 @@
+WITH potential_duplicates AS (
+    SELECT
+        p1.id AS id1,
+        p2.id AS id2,
+        pv1.title AS title1,
+        pv2.title AS title2,
+        pv1.issn AS issn1,
+        pv2.issn AS issn2,
+        pv1.sourcevolume AS sourcevolume1,
+        pv2.sourcevolume AS sourcevolume2,
+        pv1.sourcepages AS sourcepages1,
+        pv2.sourcepages AS sourcepages2,
+        pv1.pubyear,
+        pv2.pubyear,
+        pv1.publication_type_id,
+        pv2.publication_type_id,
+        pt1.label_sv AS publication_type_label1,
+        pt2.label_sv AS publication_type_label2,
+        similarity(pv1.title, pv2.title) AS title_similarity,
+        similarity(pv1.issn, pv2.issn) AS issn_similarity,
+        similarity(pv1.sourcevolume, pv2.sourcevolume) AS volume_similarity,
+        similarity(pv1.sourcepages, pv2.sourcepages) AS pages_similarity
+    FROM
+        publication_versions pv1
+    JOIN
+        publication_versions pv2 ON pv1.id < pv2.id
+        AND pv1.pubyear = pv2.pubyear
+        AND pv1.publication_type_id = pv2.publication_type_id
+    JOIN
+        publications p1 ON pv1.id = p1.current_version_id AND p1.deleted_at IS NULL AND p1.process_state NOT IN ('DRAFT', 'PREDRAFT') 
+    JOIN
+        publications p2 ON pv2.id = p2.current_version_id AND p2.deleted_at IS NULL AND p2.process_state NOT IN ('DRAFT', 'PREDRAFT') 
+    JOIN 
+        publication_types pt1 ON pv1.publication_type_id = pt1.id
+    JOIN 
+        publication_types pt2 ON pv2.publication_type_id = pt2.id
+    JOIN 
+        publication_identifiers pi1 ON pi1.publication_version_id = pv1.id
+    JOIN 
+        publication_identifiers pi2 ON pi2.publication_version_id = pv2.id
+    WHERE
+        similarity(pv1.title, pv2.title) > 0.6  -- Fuzzy title match
+        AND similarity(pv1.issn, pv2.issn) > 0.6  -- Fuzzy ISSN match
+        AND similarity(pv1.sourcevolume, pv2.sourcevolume) > 0.6  -- Fuzzy volume mach
+        AND similarity(pv1.sourcepages, pv2.sourcepages) > 0.6  -- Fuzzy pages match
+        and pv1.pubyear BETWEEN EXTRACT(YEAR FROM (DATE_TRUNC('year', CURRENT_DATE) - INTERVAL '7 years')) AND EXTRACT(YEAR FROM (DATE_TRUNC('year', CURRENT_DATE) - INTERVAL '1 year')) 
+)
+SELECT *
+FROM potential_duplicates
+ORDER BY title_similarity DESC, issn_similarity DESC, volume_similarity DESC, pages_similarity DESC;
+
+
+
+
+
+SELECT left(t1.title, 20) AS field1, 
+       left(t2.title, 20) AS field2, 
+       similarity(t1.title, t2.title) AS similarity
+FROM publication_versions t1
+JOIN publication_versions t2 ON t1.title <> t2.title
+WHERE similarity(left(t1.title,20), left(t2.title,20)) >= 0.5
+;

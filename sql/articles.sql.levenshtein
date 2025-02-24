@@ -1,0 +1,92 @@
+WITH potential_duplicates AS (
+    SELECT
+        p1.id AS id1,
+        p2.id AS id2,
+        pv1.title AS title1,
+        pv2.title AS title2,
+        pv1.issn AS issn1,
+        pv2.issn AS issn2,
+        pv1.sourcevolume AS sourcevolume1,
+        pv2.sourcevolume AS sourcevolume2,
+        pv1.sourcepages AS sourcepages1,
+        pv2.sourcepages AS sourcepages2,
+        pv1.pubyear,
+        pv2.pubyear,
+        pv1.publication_type_id,
+        pv2.publication_type_id,
+        pt1.label_sv AS publication_type_label1,
+        pt2.label_sv AS publication_type_label2,--,
+        REGEXP_REPLACE(pv1.issn, '[^0-9Xx]', '', 'g') as issn_cleaned1, 
+        REGEXP_REPLACE(pv2.issn, '[^0-9Xx]', '', 'g') as issn_cleaned2, 
+        levenshtein(substring(pv1.title, 0, 100), substring(pv2.title, 0, 100)) AS title_levenshtein,
+        levenshtein(substring(pv1.issn, 0, 100), substring(pv2.issn, 0, 100)) AS issn_levenshtein,
+        levenshtein(substring(pv1.sourcevolume, 0, 100), substring(pv2.sourcevolume, 0, 100)) AS volume_levenshtein,
+        levenshtein(substring(pv1.sourcepages, 0, 100), substring(pv2.sourcepages, 0, 100)) AS pages_levenshtein--, 
+----        levenshtein(SUBSTRING(REGEXP_REPLACE(pv1.issn, '[^0-9Xx]', '', 'g') FROM 1 FOR 8), SUBSTRING(REGEXP_REPLACE(pv2.issn, '[^0-9Xx]', '', 'g') FROM 1 FOR 8)) as compare_issn_levenshtein
+
+
+    FROM
+        publication_versions pv1
+    JOIN
+        publication_versions pv2 ON pv1.id < pv2.id
+        AND pv1.pubyear = pv2.pubyear
+        AND pv1.publication_type_id = pv2.publication_type_id
+    JOIN
+        publications p1 ON pv1.id = p1.current_version_id AND p1.deleted_at IS NULL AND p1.process_state NOT IN ('DRAFT', 'PREDRAFT') 
+    JOIN
+        publications p2 ON pv2.id = p2.current_version_id AND p2.deleted_at IS NULL AND p2.process_state NOT IN ('DRAFT', 'PREDRAFT') 
+    JOIN 
+        publication_types pt1 ON pv1.publication_type_id = pt1.id
+    JOIN 
+        publication_types pt2 ON pv2.publication_type_id = pt2.id
+    JOIN 
+        publication_identifiers pi1 ON pi1.publication_version_id = pv1.id
+    JOIN 
+        publication_identifiers pi2 ON pi2.publication_version_id = pv2.id
+    WHERE
+        levenshtein(substring(pv1.title, 0, 100), substring(pv2.title, 0, 100)) < 3  -- Fuzzy title match
+        AND levenshtein(substring(pv1.issn, 0, 100), substring(pv2.issn, 0, 100)) < 3  -- Fuzzy ISSN match
+        AND REGEXP_REPLACE(pv1.issn, '[^0-9Xx]', '', 'g') = REGEXP_REPLACE(pv2.issn, '[^0-9Xx]', '', 'g')  -- Cleaned ISSN match
+--        AND levenshtein(SUBSTRING(REGEXP_REPLACE(pv1.issn, '[^0-9Xx]', '', 'g')), SUBSTRING(REGEXP_REPLACE(pv2.issn, '[^0-9Xx]', '', 'g'))) < 3
+        -- AND levenshtein(substring(pv1.sourcevolume, 0, 100), substring(pv2.sourcevolume, 0, 100)) < 3  -- Fuzzy volume mach
+        -- AND levenshtein(substring(pv1.sourcepages, 0, 100), substring(pv2.sourcepages, 0, 100)) < 3  -- Fuzzy pages match
+        AND pv1.pubyear BETWEEN EXTRACT(YEAR FROM (DATE_TRUNC('year', CURRENT_DATE) - INTERVAL '7 years')) AND EXTRACT(YEAR FROM (DATE_TRUNC('year', CURRENT_DATE) - INTERVAL '1 year')) 
+
+--        and p1.id in ( select id from publications order by id desc limit 10000 )
+--        and p2.id in ( select id from publications order by id desc limit 10000 )
+
+        AND pv1.publication_type_id IN (16, 2, 1, 41, 42, 7, 44, 5, 3, 45, 22)
+--        AND pv2.publication_type_id IN (16, 2, 1, 41, 42, 7, 44, 5, 3, 45, 22)
+
+
+)
+SELECT *
+FROM potential_duplicates
+ORDER BY title_levenshtein DESC, issn_levenshtein DESC, volume_levenshtein DESC, pages_levenshtein DESC;
+
+
+-- SELECT REGEXP_REPLACE(issn, '[^0-9Xx]', '', 'g') AS cleaned_issn
+-- FROM publication_versions;
+
+-- select pv.issn
+-- from publications p
+-- join publication_versions pv on p.current_version_id = pv.id
+
+-- select publication_id, max(length(title)) from publication_versions group by publication_id having max(length(title)) >255;
+-- select publication_id, max(length(issn)) from publication_versions group by publication_id having max(length(issn)) >255;
+-- select publication_id, max(length(sourcevolume)) from publication_versions group by publication_id having max(length(sourcevolume)) >255;
+-- select publication_id, max(length(sourcepages)) from publication_versions group by publication_id having max(length(sourcepages)) >255;
+
+-- select max(length(title)) from publication_versions;
+-- select max(length(issn)) from publication_versions;
+-- select max(length(sourcevolume)) from publication_versions;
+-- select max(length(sourcepages)) from publication_versions;
+
+
+-- SELECT left(t1.title, 20) AS field1, 
+--        left(t2.title, 20) AS field2, 
+--        levenshtein(t1.title, t2.title) AS levenshtein
+-- FROM publication_versions t1
+-- JOIN publication_versions t2 ON t1.title <> t2.title
+-- WHERE levenshtein(left(t1.title,20), left(t2.title,20)) >= 0.5
+-- ;
