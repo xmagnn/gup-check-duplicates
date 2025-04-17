@@ -1,9 +1,6 @@
 #!/bin/bash
 set -e
 
-LOGFILE=${0}-output.log
-ERRORFILE=${0}-error.log
-
 # Remote connection details
 REMOTE_USER="apps"
 REMOTE_GUP_HOST="nomad-client-3.ub.gu.se"
@@ -11,35 +8,62 @@ REMOTE_GUPEA_HOST="nomad-client-2.ub.gu.se"
 REMOTE_BACKUP="/tmp/gup.sql"
 REMOTE_GUPEA_DIR="/mnt/backups/databases/gupea-gupeadb-1"
 GUPEA_FILE_PATTERN="dspace_*.sql"
+LOGFILE=run.log
+SRC=sql
+DEST=res
 
-(
+mkdir -p ${SRC} ${DEST}
 
-# Get a backup-copy of GUP
-echo "$(date '+%Y-%m-%d %H:%M:%S') Backing up GUP on ${REMOTE_GUP_HOST}..."
-ssh ${REMOTE_USER}@${REMOTE_GUP_HOST} "cd /apps/gup/ && ./docker-compose-release.sh exec db pg_dump -U gup_user -d gup_db > ${REMOTE_BACKUP}"
-echo "$(date '+%Y-%m-%d %H:%M:%S') Backup created on remote server: ${REMOTE_BACKUP}"
+echo "" >> "$LOGFILE"
+echo "$(date '+%Y-%m-%d %H:%M:%S') Starting." >> $LOGFILE
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') Downloading ${REMOTE_BACKUP}..."
-rsync --progress ${REMOTE_USER}@${REMOTE_GUP_HOST}:${REMOTE_BACKUP} ${REMOTE_BACKUP}
-echo "$(date '+%Y-%m-%d %H:%M:%S') Backup transferred to local machine."
-
-ssh ${REMOTE_USER}@${REMOTE_GUP_HOST} "rm -f ${REMOTE_BACKUP}"
-echo "$(date '+%Y-%m-%d %H:%M:%S') Backup file removed from remote server."
-echo "$(date '+%Y-%m-%d %H:%M:%S') GUP downloaded"
-
-# Get last backup-copy of GUPEA
-LATEST_FILE=$(ssh ${REMOTE_USER}@${REMOTE_GUPEA_HOST} "ls -t ${REMOTE_GUPEA_DIR}/${GUPEA_FILE_PATTERN} | head -n 1")
-
-if [ -z "$LATEST_FILE" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') No file found matching pattern ${GUPEA_FILE_PATTERN}"
-    exit 1
+# Check if any containers are not running
+if ! docker compose ps | grep -q "Up"; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Some containers are not running. Start them and rerun script." >> $LOGFILE
+    echo "Some containers are not running. Start them and rerun script."
+    exit 1;
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') All containers are running." >> $LOGFILE
 fi
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') Fetching ${LATEST_FILE}"
-scp ${REMOTE_USER}@${REMOTE_GUPEA_HOST}:"${LATEST_FILE}" /tmp/gupea.sql
-echo "$(date '+%Y-%m-%d %H:%M:%S') GUPEA downloaded"
+# Get a backup-copy of GUP
+if [ -f "gup.sql" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Local GUP-file exists. Using it." >> $LOGFILE
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Backing up GUP on ${REMOTE_GUP_HOST}..." >> $LOGFILE
+    #ssh ${REMOTE_USER}@${REMOTE_GUP_HOST} "cd /apps/gup/ && ./docker-compose-release.sh exec db pg_dump -U gup_user -d gup_db > ${REMOTE_BACKUP}"
+    ssh ${REMOTE_USER}@${REMOTE_GUP_HOST} "cd /apps/gup/ && ./docker-compose-release.sh exec db pg_dump -U gup_user -d gup_db" > gup.sql
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Backup created on remote server: ${REMOTE_BACKUP}" >> $LOGFILE
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') Restore the databases"
+    #echo "$(date '+%Y-%m-%d %H:%M:%S') Downloading ${REMOTE_BACKUP}..." >> $LOGFILE
+    #rsync --progress ${REMOTE_USER}@${REMOTE_GUP_HOST}:${REMOTE_BACKUP} gup.sql
+    #echo "$(date '+%Y-%m-%d %H:%M:%S') Backup transferred to local machine." >> $LOGFILE
+
+    #ssh ${REMOTE_USER}@${REMOTE_GUP_HOST} "rm -f ${REMOTE_BACKUP}" >> $LOGFILE
+    #echo "$(date '+%Y-%m-%d %H:%M:%S') Backup file removed from remote server." >> $LOGFILE
+    echo "$(date '+%Y-%m-%d %H:%M:%S') GUP downloaded" >> $LOGFILE
+fi
+
+# Get last backup-copy of GUPEA
+
+if [ -f "gupea.sql" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Local GUPEA-file exists. Using it." >> $LOGFILE
+else
+
+    LATEST_FILE=$(ssh ${REMOTE_USER}@${REMOTE_GUPEA_HOST} "ls -t ${REMOTE_GUPEA_DIR}/${GUPEA_FILE_PATTERN} | head -n 1")
+
+    if [ -z "$LATEST_FILE" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') No file found matching pattern ${GUPEA_FILE_PATTERN}" >> $LOGFILE
+        exit 1
+    fi
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Fetching ${LATEST_FILE}" >> $LOGFILE
+    scp ${REMOTE_USER}@${REMOTE_GUPEA_HOST}:"${LATEST_FILE}" gupea.sql
+    echo "$(date '+%Y-%m-%d %H:%M:%S') GUPEA downloaded" >> $LOGFILE
+
+fi
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') Restore the databases" >> $LOGFILE
 docker compose exec db psql -U postgres -c "DROP DATABASE IF EXISTS gup_db;"
 docker compose exec db psql -U postgres -c "DROP DATABASE IF EXISTS dspace;"
 docker compose exec db psql -U postgres -c "DROP ROLE IF EXISTS dspace;"
@@ -56,27 +80,21 @@ docker compose exec db psql -U postgres -c "ALTER ROLE gup_user WITH CREATEDB CR
 docker compose exec db psql -U postgres -c "CREATE DATABASE gup_db OWNER gup_user;"
 docker compose exec db psql -U postgres -c "CREATE DATABASE dspace OWNER dspace;"
 
-docker compose exec -T db psql -U dspace   -d dspace -AF ';' < /tmp/gupea.sql
-docker compose exec -T db psql -U gup_user -d gup_db -AF ';' < /tmp/gup.sql
+docker compose exec -T db psql -U dspace   -d dspace -AF ';' < gupea.sql
+docker compose exec -T db psql -U gup_user -d gup_db -AF ';' < gup.sql
 
-if [ "$1" != "keep" ]; then
-    rm /tmp/gup.sql /tmp/gupea.sql
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Temporary backup files removed."
+if [ "$1" == "remove" ]; then
+    rm gup.sql gupea.sql
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Temporary backup files removed." >> $LOGFILE
 else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Keeping temporary backup files."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Keeping temporary backup files." >> $LOGFILE
 fi
 
-# Minimize the database
-#docker compose exec db psql -U postgres -d gup_db -c "DELETE FROM publications WHERE id IN (SELECT publication_id FROM publication_versions WHERE pubyear != 2024 AND publication_id NOT IN (179834, 249196, 252223, 262678, 262679, 262742, 273446, 278625, 289897, 290028, 290066, 290232, 290482, 292764, 296801, 296902, 300378, 300534, 300536, 313064, 339988));"
-#docker compose exec db psql -U postgres -d gup_db -c "DELETE FROM publication_links WHERE publication_version_id IN (SELECT id FROM publication_versions WHERE publication_id NOT IN (SELECT id FROM publications ORDER BY id));"
-#docker compose exec db psql -U postgres -d gup_db -c "DELETE FROM publication_versions WHERE publication_id NOT IN (SELECT id FROM publications ORDER BY id);"
-# Minimize the database
-
-echo "$(date '+%Y-%m-%d %H:%M:%S') Creating extensions"
+echo "$(date '+%Y-%m-%d %H:%M:%S') Creating extensions" >> $LOGFILE
 docker compose exec db psql -U postgres -d gup_db -c "CREATE EXTENSION pg_trgm;"
 docker compose exec db psql -U postgres -d gup_db -c "CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;"
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') Creating indexes"
+echo "$(date '+%Y-%m-%d %H:%M:%S') Creating indexes" >> $LOGFILE
 docker compose exec db psql -U postgres -d gup_db -c "CREATE INDEX ON publication_versions USING gin (title gin_trgm_ops);"
 docker compose exec db psql -U postgres -d gup_db -c "CREATE INDEX ON publication_versions USING gin (issn gin_trgm_ops);"
 docker compose exec db psql -U postgres -d gup_db -c "CREATE INDEX ON publication_versions USING gin (sourcevolume gin_trgm_ops);"
@@ -106,31 +124,30 @@ docker compose exec db psql -U postgres -d gup_db -c "CREATE INDEX idx_publicati
 docker compose exec db psql -U postgres -d gup_db -c "CREATE INDEX idx_sourcetitle_trgm ON publication_versions USING gin (sourcetitle gin_trgm_ops);"
 docker compose exec db psql -U postgres -d gup_db -c "CREATE INDEX idx_title_trgm ON publication_versions USING gin (title gin_trgm_ops);"
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') Run the scripts"
-SRC=sql
-DEST=res
-
-mkdir -p ${SRC} ${DEST}
+echo "$(date '+%Y-%m-%d %H:%M:%S') Run the scripts" >> $LOGFILE
 
 # Avhandlingar som finns i GUP men inte i GUPEA
-echo "$(date '+%Y-%m-%d %H:%M:%S') Doing GUPEA"
+echo "$(date '+%Y-%m-%d %H:%M:%S') Doing GUPEA" >> $LOGFILE
 docker compose exec -T db psql -U gup_user -d gup_db -AF ';' < $SRC/gupea1.sql > $DEST/gupea1.txt
-docker cp $DEST/gupea1.txt postgres-db-1:gupea1.txt
+docker cp $DEST/gupea1.txt gup-check-duplicates-db-1:/gupea1.txt
 docker compose exec -T db psql -U dspace -d dspace -c "CREATE TABLE already_in_gup (handle VARCHAR(255));"
 docker compose exec -T db psql -U dspace -d dspace -c "\copy already_in_gup FROM '/gupea1.txt' DELIMITER ';' CSV"
 docker compose exec -T db psql -U dspace -d dspace -AF '¤' < $SRC/gupea2.sql > $DEST/gupea.csv
-docker compose exec -T db rm gupea1.txt
+docker compose exec -T db rm /gupea1.txt
 docker compose exec -T db psql -U dspace -d dspace -c "DROP TABLE already_in_gup;"
 rm $DEST/gupea1.txt
 
 # The rest
-echo "$(date '+%Y-%m-%d %H:%M:%S') Doing Articles" ; docker compose exec -T db psql -U gup_user -d gup_db -AF '¤' < $SRC/articles.sql > $DEST/articles.csv
-echo "$(date '+%Y-%m-%d %H:%M:%S') Doing Delayed Posts" ; docker compose exec -T db psql -U gup_user -d gup_db -AF '¤' < $SRC/delayed_posts.sql > $DEST/delayed_posts.csv
-# echo "$(date '+%Y-%m-%d %H:%M:%S') Doing Epub Ahead of Print" ; docker compose exec -T db psql -U gup_user -d gup_db -AF '¤' < $SRC/epub_ahead_of_print.sql > $DEST/epub_ahead_of_print.csv
-echo "$(date '+%Y-%m-%d %H:%M:%S') Doing External id" ; docker compose exec -T db psql -U gup_user -d gup_db -AF '¤' < $SRC/external_id.sql > $DEST/external_id.csv
-# echo "$(date '+%Y-%m-%d %H:%M:%S') Doing Persons" ; docker compose exec -T db psql -U gup_user -d gup_db -AF '¤' < $SRC/persons.sql > $DEST/persons.csv
-echo "$(date '+%Y-%m-%d %H:%M:%S') Doing Books" ; docker compose exec -T db psql -U gup_user -d gup_db -AF '¤' < $SRC/books.sql > $DEST/books.csv
-echo "$(date '+%Y-%m-%d %H:%M:%S') Done"
-echo ""
+echo "$(date '+%Y-%m-%d %H:%M:%S') Doing Articles"  >> $LOGFILE
+docker compose exec -T db psql -U gup_user -d gup_db -AF '¤' < $SRC/articles.sql > $DEST/articles.csv
 
-) >> ${LOGFILE} 2>> ${ERRORFILE}
+echo "$(date '+%Y-%m-%d %H:%M:%S') Doing Delayed Posts" >> $LOGFILE 
+docker compose exec -T db psql -U gup_user -d gup_db -AF '¤' < $SRC/delayed_posts.sql > $DEST/delayed_posts.csv
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') Doing External id" >> $LOGFILE 
+docker compose exec -T db psql -U gup_user -d gup_db -AF '¤' < $SRC/external_id.sql > $DEST/external_id.csv
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') Doing Books"  >> $LOGFILE
+docker compose exec -T db psql -U gup_user -d gup_db -AF '¤' < $SRC/books.sql > $DEST/books.csv
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') Done" >> $LOGFILE
